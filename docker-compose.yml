@@ -1,29 +1,70 @@
 services:
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    env_file: .env
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: docai
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
-      # persist ChromaDB data across restarts and rebuilds
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/docai
+    volumes:
       - chroma_data:/app/data/chroma
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     restart: unless-stopped
 
   ui:
     build:
-      context: .
-      dockerfile: Dockerfile.ui
+      context: ./ui
+      dockerfile: ../Dockerfile.ui
       args:
-        # VITE_API_URL is baked into the React build at compile time.
-        # It must be the URL the user's browser can reach — not an internal hostname.
         VITE_API_URL: http://localhost:8000
     ports:
       - "3000:80"
     depends_on:
-      - api
+      - backend
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:latest
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: admin
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:-n8n-secret}
+      WEBHOOK_URL: http://localhost:5678
+      GENERIC_TIMEZONE: Asia/Ho_Chi_Minh
+    volumes:
+      - n8n_data:/home/node/.n8n
+    ports:
+      - "5678:5678"
     restart: unless-stopped
 
 volumes:
+  postgres_data:
   chroma_data:
+  n8n_data:

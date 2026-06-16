@@ -1,0 +1,61 @@
+{
+  "name": "Document Uploaded → Slack Notify",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "document-uploaded",
+        "responseMode": "responseNode"
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "message",
+              "value": "=📄 New document uploaded: *{{ $json.data.filename }}*\nChunks indexed: {{ $json.data.chunk_count }}"
+            }
+          ]
+        }
+      },
+      "name": "Format Message",
+      "type": "n8n-nodes-base.set",
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.message }}"
+            }
+          ]
+        }
+      },
+      "name": "Slack Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"received\": true}"
+      },
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [900, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Format Message", "type": "main", "index": 0 }]] },
+    "Format Message": { "main": [[{ "node": "Slack Notify", "type": "main", "index": 0 }]] },
+    "Slack Notify": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  }
+}

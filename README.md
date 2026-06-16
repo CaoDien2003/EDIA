@@ -1,183 +1,289 @@
-# PDF AI Assistant
+# Enterprise Document Intelligence Assistant
 
-A fully local RAG system with separate Admin and User flows. No external API required — everything runs on your own hardware.
+A RAG chatbot with conversation memory, structured extraction, webhook integration, and n8n automation. Runs fully local on GPU — no external API required.
 
-![Architecture](docs/architecture.png)
+## Stack
 
-- **LLM**: Qwen3-8B (local, HuggingFace Transformers)
-- **Embeddings**: BGE-M3 (local, sentence-transformers)
-- **Vector store**: ChromaDB
-- **Backend**: FastAPI
-- **Frontend**: React + Vite (served by nginx in Docker)
+| Layer | Technology |
+|---|---|
+| LLM | Qwen3-8B (local, HuggingFace Transformers) — switchable to Groq |
+| Embeddings | BGE-M3 (local, sentence-transformers) |
+| Vector store | ChromaDB |
+| Database | PostgreSQL (conversations, analytics, webhooks) |
+| Backend | FastAPI — versioned API (`/api/v1/`) |
+| Automation | n8n (self-hosted) |
+| Frontend | React + Vite |
+| Deployment | Docker Compose |
 
-> Because the LLM runs locally, this project requires a GPU with at least 16 GB VRAM. Cloud platforms like Railway or Render do not provide GPU and cannot run this stack.
-
----
-
-## Requirements
-
-- Python 3.10+
-- Node.js 20+
-- GPU with at least 16 GB VRAM (Qwen3-8B in bfloat16)
+> Requires a GPU with at least 16 GB VRAM for Qwen3-8B in bfloat16. Tested on A100 80 GB.
 
 ---
 
-## Run locally (no Docker)
+## Architecture
 
-### Backend
+```
+PDF Upload
+  → PyMuPDF + chunk splitting
+  → BGE-M3 embeddings → ChromaDB
+  → PostgreSQL (document metadata)
+  → Webhook → n8n (Slack / email)
 
-```bash
-pip install -r requirements.txt
-cp .env.example .env        # set ADMIN_KEY
-uvicorn api.app:app --host 0.0.0.0 --port 8000
+User Question
+  → Load session history (PostgreSQL)
+  → ChromaDB similarity search
+  → Qwen3-8B with context + memory
+  → Save turn to PostgreSQL + analytics event
+  → Response with source citations
 ```
 
-### Frontend
+---
+
+## Quick Start
+
+### Local (no Docker)
+
+**1. Backend**
+
+```bash
+cd backend
+pip install -r requirements.txt
+cp ../.env.example ../.env   # set ADMIN_KEY at minimum
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**2. Frontend**
 
 ```bash
 cd ui
-cp .env.example .env        # VITE_API_URL=http://localhost:8000
 npm install
 npm run dev
 ```
 
-- Chat UI: `http://localhost:3000`
-- Admin UI: `http://localhost:3000/admin`
-- API docs: `http://localhost:8000/docs`
+| Service | URL |
+|---|---|
+| Chat UI | http://localhost:3000 |
+| Admin UI | http://localhost:3000/admin |
+| API docs | http://localhost:8000/docs |
+| n8n | http://localhost:5678 |
 
 ---
 
-## Run with Docker Compose
+### Docker Compose (full stack)
 
 ```bash
-cp .env.example .env        # set ADMIN_KEY
+cp .env.example .env    # set ADMIN_KEY and N8N_PASSWORD
 docker compose up --build
 ```
 
-- Chat UI: `http://localhost:3000`
-- Admin UI: `http://localhost:3000/admin`
-- API: `http://localhost:8000`
-
-> `VITE_API_URL` in `docker-compose.yml` is baked into the React build at compile time and must be the URL the **browser** can reach. For a VPS, replace `localhost` with your domain or IP.
-
-ChromaDB data persists in a Docker volume (`chroma_data`).
+Starts: **PostgreSQL** + **Backend** + **UI** + **n8n**
 
 ```bash
-docker compose down          # stop (keep data)
-docker compose down -v       # stop + delete all indexed documents
+docker compose down      # stop, keep data
+docker compose down -v   # stop + wipe all volumes
 ```
 
 ---
 
-## Usage
+## API
 
-### User
+All endpoints under `/api/v1/`. Admin endpoints require header `X-Admin-Key: <your-key>`.
 
-Open `http://<host>:3000` — type a question, get an answer. Each response includes a **Sources** toggle showing which file and page the answer came from.
+### Chat
 
-### Admin
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `POST` | `/api/v1/chat` | — | Ask a question (optional `session_id`) |
+| `GET` | `/api/v1/chat/sessions/{id}/messages` | — | Conversation history |
+| `DELETE` | `/api/v1/chat/sessions/{id}` | — | Clear a session |
 
-Navigate to `http://<host>:3000/admin` (not linked from the chat UI). Enter the `ADMIN_KEY` to access:
+### Documents
 
-- **Upload** — select a PDF, click "Upload & Index". Chunking and embedding happen immediately.
-- **Documents** — view all indexed files with upload date.
-- **Delete** — remove a document and all its chunks from the vector store.
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/documents` | Admin | List all documents |
+| `POST` | `/api/v1/documents/upload` | Admin | Upload + index a PDF |
+| `DELETE` | `/api/v1/documents/{id}` | Admin | Delete document and its chunks |
+| `POST` | `/api/v1/documents/{id}/extract` | Admin | Structured JSON extraction |
 
-### CLI tools
+### Webhooks
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/webhooks` | Admin | List active webhooks |
+| `POST` | `/api/v1/webhooks` | Admin | Register a webhook |
+| `DELETE` | `/api/v1/webhooks/{id}` | Admin | Remove a webhook |
+| `POST` | `/api/v1/webhooks/test/{id}` | Admin | Send test ping |
+
+### Analytics
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/analytics/summary` | — | 7-day metrics |
+| `GET` | `/api/v1/analytics/events` | — | Recent event log |
+
+### Health
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | Liveness check |
+
+---
+
+## Features
+
+### Chat with memory
+
+Each conversation tracks a `session_id`. The last N message pairs are injected into the LLM prompt automatically.
 
 ```bash
-# Ingest a PDF directly (no server needed)
-python -m src.ingest data/raw_pdf/your_file.pdf
+# New session
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the contract value?"}'
 
-# CLI chat
-python -m src.chat
-
-# Debug similarity search
-python -m src.search "your query"
+# Continue session
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What are the penalties?", "session_id": "<uuid>"}'
 ```
+
+### Structured extraction
+
+```bash
+curl -X POST http://localhost:8000/api/v1/documents/<id>/extract \
+  -H "X-Admin-Key: your-key"
+```
+
+Returns:
+```json
+{
+  "document_id": "...",
+  "fields": {
+    "parties": ["Company A", "Company B"],
+    "effective_date": "2025-01-01",
+    "value": 50000,
+    "currency": "USD",
+    "penalty_clauses": ["Late delivery: 5% per day"],
+    "risk_level": "high",
+    "risks": ["No limitation of liability clause"]
+  }
+}
+```
+
+If `risk_level` is `"high"`, a `document.high_risk` webhook fires automatically.
+
+### Webhooks
+
+Register any URL to receive push events:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/webhooks \
+  -H "X-Admin-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "http://localhost:5678/webhook/doc-uploaded", "events": ["document.uploaded"]}'
+```
+
+Available events: `document.uploaded`, `document.high_risk`, `chat.completed`
+
+### n8n Automation
+
+Three workflow templates in `n8n/workflows/`:
+
+| File | Trigger | Action |
+|---|---|---|
+| `document_uploaded_notify.json` | `document.uploaded` | Slack notification |
+| `daily_analytics_report.json` | Mon–Fri 8AM | Analytics email report |
+| `high_risk_document_alert.json` | `document.high_risk` | Slack alert + escalation |
+
+Import: n8n UI → Workflows → Import from file
+
+---
+
+## Admin Panel
+
+Navigate directly to `http://localhost:3000/admin`. The link is intentionally not exposed in the chat UI.
+
+Authenticate with `ADMIN_KEY`. Features:
+- Upload and index PDF documents
+- Delete documents
+- Run structured extraction
+- View analytics
 
 ---
 
 ## Configuration
 
-### Backend (`.env`)
+`.env` (copy from `.env.example`):
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLM_MODEL` | `Qwen/Qwen3-8B` | HuggingFace causal LLM (~16 GB VRAM) |
-| `MAX_NEW_TOKENS` | `512` | Max tokens generated per answer |
-| `EMBED_MODEL` | `BAAI/bge-m3` | HuggingFace embedding model (~2 GB RAM) |
-| `CHUNK_SIZE` | `1000` | Characters per chunk |
+| `DATABASE_URL` | `postgresql+asyncpg://...` | PostgreSQL connection |
+| `LLM_BACKEND` | `local` | `local` (Qwen3 on GPU) or `groq` |
+| `LLM_MODEL` | `Qwen/Qwen3-8B` | HuggingFace model ID |
+| `GROQ_API_KEY` | — | Required only when `LLM_BACKEND=groq` |
+| `GROQ_MODEL` | `llama3-8b-8192` | Groq model name |
+| `EMBED_MODEL` | `BAAI/bge-m3` | Embedding model |
+| `MAX_NEW_TOKENS` | `512` | Max tokens per LLM response |
+| `CHUNK_SIZE` | `1000` | PDF chunk size in characters |
 | `CHUNK_OVERLAP` | `200` | Overlap between chunks |
 | `TOP_K` | `3` | Retrieved chunks per query |
-| `ADMIN_KEY` | `admin-secret` | Secret key for `/admin/*` endpoints |
-
-### Frontend (`ui/.env`)
-
-| Variable | Default | Description |
-|---|---|---|
-| `VITE_API_URL` | `http://localhost:8000` | Backend URL (must be reachable from the browser) |
+| `MEMORY_WINDOW` | `5` | Conversation pairs in prompt |
+| `ADMIN_KEY` | `admin-secret` | Header `X-Admin-Key` for admin routes |
+| `N8N_PASSWORD` | `n8n-secret` | n8n basic auth password |
+| `WEBHOOK_TIMEOUT` | `5.0` | Outbound webhook timeout (seconds) |
 
 ---
 
-## Project structure
+## Project Structure
 
 ```
 pdf-ai-assistant/
-├── api/
-│   └── app.py                  # FastAPI (user chat + admin routes)
-├── src/
-│   ├── config.py
-│   ├── ingest.py
-│   ├── chat.py
-│   ├── search.py
-│   ├── embeddings/embedder.py
-│   ├── llm/qwen.py
-│   ├── loaders/pdf_loader.py
-│   ├── utils/chunker.py
-│   └── vectorstores/chroma_store.py
+├── backend/
+│   ├── app/
+│   │   ├── main.py            # FastAPI app + lifespan (table creation, model warmup)
+│   │   ├── config.py          # pydantic-settings — all env vars
+│   │   ├── database.py        # async SQLAlchemy engine + session factory
+│   │   ├── models/            # ORM: document, conversation, analytics, webhook
+│   │   ├── schemas/           # Pydantic: chat, document, webhook
+│   │   ├── api/
+│   │   │   ├── deps.py        # Admin key auth dependency
+│   │   │   └── v1/            # Versioned routes
+│   │   ├── services/
+│   │   │   ├── rag.py         # Retrieval + prompt building
+│   │   │   ├── ingest.py      # PDF → chunks → ChromaDB
+│   │   │   ├── memory.py      # Session + conversation history
+│   │   │   ├── extraction.py  # Structured JSON extraction
+│   │   │   └── webhook.py     # Outbound fire-and-forget webhooks
+│   │   └── core/
+│   │       ├── llm.py         # Qwen3 / Groq abstraction
+│   │       ├── embeddings.py  # BGE-M3
+│   │       └── vectorstore.py # ChromaDB wrapper
+│   ├── Dockerfile
+│   └── requirements.txt
+├── n8n/
+│   ├── workflows/             # Ready-to-import n8n workflow JSONs
+│   └── setup_workflows.py     # Script to create workflows via n8n REST API
 ├── ui/
-│   ├── src/
-│   │   ├── App.jsx             # Routes: / and /admin
-│   │   ├── main.jsx
-│   │   ├── index.css
-│   │   └── pages/
-│   │       ├── Chat.jsx        # User chat (ChatGPT-style)
-│   │       └── Admin.jsx       # Admin panel (login-gated, hidden URL)
-│   ├── index.html
-│   ├── package.json
-│   ├── vite.config.js
-│   └── nginx.conf              # Serves React build in Docker
-├── docs/
-│   └── architecture.png
-├── scripts/
-│   └── gen_diagram.py
-├── data/raw_pdf/
-├── Dockerfile                  # API container
-├── Dockerfile.ui               # React build → nginx container
+│   └── src/pages/
+│       ├── Chat.jsx           # Chat interface (session-aware)
+│       └── Admin.jsx          # Admin panel (upload, extract, analytics)
+├── data/
+│   └── chroma/                # ChromaDB vector store (persisted)
 ├── docker-compose.yml
-├── requirements.txt
-├── .env.example
-└── README.md
+├── Dockerfile.ui              # React build → nginx
+└── .env.example
 ```
 
 ---
 
-## API reference
+## Database Schema
 
-### `POST /chat`
-
-```json
-{ "question": "What is the return policy?" }
 ```
-```json
-{ "answer": "...", "sources": [{ "file": "faq.pdf", "page": 2 }] }
+documents   — indexed PDF files (name, chunk_count, status)
+sessions    — chat sessions
+messages    — conversation turns (role, content, sources JSONB)
+events      — analytics log (event_type, duration_ms, metadata JSONB)
+webhooks    — registered outbound URLs + subscribed events
 ```
 
-### Admin — header `X-Admin-Key: <your-key>`
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/admin/documents` | List all indexed documents |
-| `POST` | `/admin/upload` | Upload + index a PDF (`multipart/form-data`, field `file`) |
-| `DELETE` | `/admin/documents/{name}` | Remove all chunks for a document |
+Tables are created automatically on first startup — no migration needed in development.

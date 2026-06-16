@@ -1,0 +1,76 @@
+{
+  "name": "High Risk Document → Alert Team",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "high-risk-document",
+        "responseMode": "responseNode"
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.data.risk_level }}",
+              "value2": "high"
+            }
+          ]
+        }
+      },
+      "name": "IF High Risk",
+      "type": "n8n-nodes-base.if",
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "alert",
+              "value": "=🚨 *HIGH RISK CONTRACT DETECTED*\n\nFile: {{ $json.data.filename }}\nRisks identified:\n{{ $json.data.risks.join('\\n• ') }}"
+            }
+          ]
+        }
+      },
+      "name": "Format Alert",
+      "type": "n8n-nodes-base.set",
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [{ "name": "text", "value": "={{ $json.alert }}" }]
+        }
+      },
+      "name": "Slack Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"received\": true}"
+      },
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [900, 400]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "IF High Risk", "type": "main", "index": 0 }]] },
+    "IF High Risk": {
+      "main": [
+        [{ "node": "Format Alert", "type": "main", "index": 0 }],
+        [{ "node": "Respond", "type": "main", "index": 0 }]
+      ]
+    },
+    "Format Alert": { "main": [[{ "node": "Slack Alert", "type": "main", "index": 0 }]] }
+  }
+}

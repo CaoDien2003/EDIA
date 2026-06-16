@@ -1,0 +1,54 @@
+{
+  "name": "Daily Analytics Report → Email",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 8 * * 1-5" }] }
+      },
+      "name": "Schedule (Mon-Fri 8AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/api/v1/analytics/summary",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "name": "GET Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "report",
+              "value": "=📊 *Daily AI Assistant Report*\n\nTotal Queries (7d): {{ $json.total_queries }}\nAvg Response Time: {{ $json.avg_response_ms }}ms\nDocuments Uploaded: {{ $json.total_uploads }}\nTotal Documents: {{ $json.total_documents }}"
+            }
+          ]
+        }
+      },
+      "name": "Format Report",
+      "type": "n8n-nodes-base.set",
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "ai-assistant@yourcompany.com",
+        "toEmail": "manager@yourcompany.com",
+        "subject": "Daily AI Assistant Analytics",
+        "text": "={{ $json.report }}"
+      },
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "position": [900, 300]
+    }
+  ],
+  "connections": {
+    "Schedule (Mon-Fri 8AM)": { "main": [[{ "node": "GET Analytics", "type": "main", "index": 0 }]] },
+    "GET Analytics": { "main": [[{ "node": "Format Report", "type": "main", "index": 0 }]] },
+    "Format Report": { "main": [[{ "node": "Send Email", "type": "main", "index": 0 }]] }
+  }
+}
