@@ -290,10 +290,8 @@ Tables are created automatically on first startup — no migration needed in dev
 
 ## 🤝 Connect With Me
 
-📧 Email: [nguyencaodien2003@gmail.com](mailto:nguyencaodien2003@gmail.com)
-
-📱 Phone: +84 396 404 443
+- Email: [nguyencaodien2003@gmail.com](mailto:nguyencaodien2003@gmail.com)
+- Phone: +84 396 404 443
 
 [![GitHub](https://img.shields.io/badge/GitHub-CaoDien2003-black?logo=github)](https://github.com/CaoDien2003)
-
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Nguyen%20Cao%20Dien-blue?logo=linkedin)](https://linkedin.com/in/nguyencaodien)
