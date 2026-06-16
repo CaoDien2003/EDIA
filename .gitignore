@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# data files
+data/chroma/
+data/raw_pdf/
+
+# React
+ui/node_modules/
+ui/dist/
+ui/.env
